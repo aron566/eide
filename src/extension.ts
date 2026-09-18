@@ -43,7 +43,7 @@ import * as mcp from './MCPServer';
 import {
     ERROR, WARNING, INFORMATION,
     view_str$operation$serialport, view_str$operation$baudrate, view_str$operation$serialport_name,
-    txt_install_now, txt_yes, view_str$prompt$feedback, rating_text, later_text, sponsor_author_text,
+    txt_install_now, txt_yes,
     view_str$prompt$install_dotnet_and_restart_vscode,
     view_str$prompt$install_dotnet_failed,
     view_str$prompt$not_found_compiler, view_str$prompt$debugCfgNotSupported, not_support_no_arm_project,
@@ -359,22 +359,6 @@ function postLaunchHook(extensionCtx: vscode.ExtensionContext) {
             resManager.setAppUsrData('InstallTime', appUsrData['InstallTime']);
         }
 
-        // A few days ago, show feedback message
-        const some_days = 7 * utility.TIME_ONE_DAY;
-        if (!appUsrData['Feedbacked'] &&
-            Date.now() > appUsrData['InstallTime'] + some_days) {
-            resManager.setAppUsrData('Feedbacked', true);
-            const msg = view_str$prompt$feedback;
-            vscode.window.showInformationMessage(msg, rating_text, sponsor_author_text).then((ans) => {
-                if (ans == rating_text) {
-                    utility.openUrl(`https://marketplace.visualstudio.com/items?itemName=CL.eide&ssr=false#review-details`);
-                }
-                if (ans == sponsor_author_text) {
-                    // https://em-ide.com/sponsor
-                    utility.openUrl(`https://em-ide.com/sponsor`);
-                }
-            });
-        }
     }
 
     // refresh external tools now

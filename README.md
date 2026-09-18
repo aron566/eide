@@ -128,11 +128,3 @@ You can build this project by your self.
 
 If you have any good ideas, you can first put forward your suggestions in the issue section. If they are feasible, we will implement them later. If you want to add features by yourself, please also share your ideas at the very beginning (otherwise, we cannot guarantee that your PR will be merged). 
 If you are ready and have completed the debugging and testing, then you can submit a pull request request to the dev branch. Thanks.
-
-## Sponsor 👍
-
-[Sponsor The Author](https://em-ide.com/sponsor)
-
-Thanks:
-
-![Sponsor List](https://em-ide.com/sponsor_list/image.png)

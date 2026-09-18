@@ -106,11 +106,3 @@
 如果您现在就想自己动手添加功能，那么也请在一开始先提出您的想法（否则我们不能保证您的PR被合并），避免浪费您的时间。
 
 在完成了更改后，如果您确保没有其他问题，那么您可以向 dev 分支提出 pull request 请求，稍后我们会进行审核。
-
-## 赞助 👍
-
-[请作者喝咖啡](https://em-ide.com/sponsor)
-
-感谢:
-
-![Sponsor List](https://em-ide.com/sponsor_list/image.png)
