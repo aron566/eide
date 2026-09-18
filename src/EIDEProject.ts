@@ -2677,8 +2677,8 @@ $(OUT_DIR):
                         staMatcher = /\(SHT_SYMTAB\)/
                         endMatcher = /^\*\* Section/
                         truncatStaMatcher = /^\s*\d+\s+(?:[^\s]+)\s*$/i
-                        truncatEndMatcher = /^\s*0x[0-9a-f]+\s+/i
-                        symMatcher = /^\s*\d+\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f]+)\s+(?:[^\s]+)\s+(?:[^\s]+)\s+(?<type>[^\s]+)\s+(?:[^\s]+)(?<size>\s+[^\s]+)?/i
+                        truncatEndMatcher = /^\s*0x[0-9a-f']+\s+/i
+                        symMatcher = /^\s*\d+\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f']+)\s+(?:[^\s]+)\s+(?:[^\s]+)\s+(?<type>[^\s]+)\s+(?:[^\s]+)(?<size>\s+[^\s]+)?/i
                         break;
                     // iar fmt:
                     //   # Name                                Value      Sec Type Bd Size   Group Other
@@ -2686,17 +2686,17 @@ $(OUT_DIR):
                         elfpath = prj.getExecutablePath();
                         elftool = [toolchain.getToolchainDir().path, 'bin', `ielfdumparm${platform.exeSuffix()}`].join(File.sep);
                         elfcmds = ['-s', '.symtab', elfpath];
-                        symMatcher = /^\s*\d+:\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f]+)\s+(?:[^\s]+)\s+(?<type>[^\s]+\s+[^\s]+)(?<size>\s+0x[0-9a-f]+)?/i;
+                        symMatcher = /^\s*\d+:\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f']+)\s+(?:[^\s]+)\s+(?<type>[^\s]+\s+[^\s]+)(?<size>\s+0x[0-9a-f']+)?/i;
                         truncatStaMatcher = /^\s*\d+:\s+(?:[^\s]+)\s*$/i
-                        truncatEndMatcher = /^\s*0x[0-9a-f]+\s+/i
+                        truncatEndMatcher = /^\s*0x[0-9a-f']+\s+/i
                         break;
                     case 'IAR_STM8':
                         elfpath = prj.getExecutablePath();
                         elftool = [toolchain.getToolchainDir().path, 'stm8', 'bin', `ielfdumpstm8${platform.exeSuffix()}`].join(File.sep);
                         elfcmds = ['-s', '.symtab', elfpath];
-                        symMatcher = /^\s*\d+:\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f]+)\s+(?:[^\s]+)\s+(?<type>[^\s]+\s+[^\s]+)(?<size>\s+0x[0-9a-f]+)?/i;
+                        symMatcher = /^\s*\d+:\s+(?<name>[^\s]+)\s+(?<addr>0x[0-9a-f']+)\s+(?:[^\s]+)\s+(?<type>[^\s]+\s+[^\s]+)(?<size>\s+0x[0-9a-f']+)?/i;
                         truncatStaMatcher = /^\s*\d+:\s+(?:[^\s]+)\s*$/i
-                        truncatEndMatcher = /^\s*0x[0-9a-f]+\s+/i
+                        truncatEndMatcher = /^\s*0x[0-9a-f']+\s+/i
                         break;
                     case 'GCC':
                     case 'RISCV_GCC':
@@ -2838,6 +2838,13 @@ $(OUT_DIR):
                     let type = m.groups['type']?.trim();
                     let name = m.groups['name']?.trim();
                     let loca = m.groups['loca']?.trim();
+
+                    // IAR 9.x dumps addresses with a thousands separator
+                    // (e.g. 0x1006'8e67) — strip it for clean display/sort
+                    if (addr)
+                        addr = addr.replace(/'/g, '');
+                    if (size)
+                        size = size.replace(/'/g, '');
 
                     if (!addr || !name) {
                         continue;

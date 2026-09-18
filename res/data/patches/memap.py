@@ -920,10 +920,10 @@ class MemapParser(object):
         else:
             return False
         try:
-            with open(mapfile, 'r') as file_input:
+            with open(mapfile, 'r', encoding='utf-8-sig', errors='replace') as file_input:
                 self.modules = parser().parse_mapfile(file_input)
             try:
-                with open("%s.old" % mapfile, 'r') as old_input:
+                with open("%s.old" % mapfile, 'r', encoding='utf-8-sig', errors='replace') as old_input:
                     self.old_modules = parser().parse_mapfile(old_input)
             except IOError:
                 self.old_modules = None

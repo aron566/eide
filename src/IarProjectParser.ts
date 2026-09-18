@@ -154,6 +154,8 @@ export async function parseIarWorkbench(ewwFile: File, iarToolchainRoot: File): 
         // try get chip info from devices database
         for (const tname in project.targets) {
             const target = project.targets[tname];
+            const gfpVal = target.settings['General.GFPUDeviceSlave'];
+            console.log('[eide-iar-chip] target=', tname, 'GFPUDeviceSlave=', JSON.stringify(gfpVal), 'typeof=', typeof gfpVal, 'iarRoot=', iarToolchainRoot.path);
             if (typeof target.settings['General.GFPUDeviceSlave'] == 'string') {
                 const rawName = target.settings['General.GFPUDeviceSlave'];
                 const chipInf = tryGetIarChipInfo(iarToolchainRoot, rawName);
@@ -268,6 +270,21 @@ function parseFileGroup(proj: IarProjectInfo, curGroup: any,
 
         curFolder.folders.push(subFolder);
 
+        // Handle group-level <excluded> (IAR ewp allows excluding a whole
+        // group in a specific configuration, e.g. TARGET_Freescale_EMAC).
+        // eide's isExcluded() matches a directory prefix, so pushing the
+        // group's virtual path excludes every file under it.
+        if (gnode.excluded) {
+            const exclCfgs = toArray(gnode.excluded[0].configuration);
+            exclCfgs.forEach((tname) => {
+                if (typeof tname == 'string') {
+                    if (proj.targets[tname]) {
+                        proj.targets[tname].excludeList.push(`${curPath}/${dirname}`);
+                    }
+                }
+            });
+        }
+
         parseFileGroup(proj, gnode, subFolder, `${curPath}/${dirname}`);
     });
 }
@@ -277,24 +294,45 @@ function parseFileGroup(proj: IarProjectInfo, curGroup: any,
 */
 function tryGetIarChipInfo(iarToolRoot: File, rawChipNameStr: string): { [key: string]: any } | undefined {
 
-    if (!iarToolRoot.IsDir())
+    if (!iarToolRoot.IsDir()) {
+        console.log('[eide-iar-chip] iarToolRoot NOT dir:', iarToolRoot.path);
+        return;
+    }
+
+    // IAR ewp device field (GFPUDeviceSlave / OGChipSelectEditMenu) format is
+    // "<tag>\t<display>" (e.g. "ZB204\tZB204"). The first token is the chip
+    // name. The chip class (vendor dir under config/devices/, e.g. "GS") is
+    // NOT embedded in this string on IAR 8.x/9.x, so scan every class subdir
+    // for the matching .i79 file instead of assuming <name> <class>.
+    const m = /^(\w+)/.exec(rawChipNameStr);
+    if (!m) {
+        console.log('[eide-iar-chip] regex no match, rawName:', JSON.stringify(rawChipNameStr));
+        return;
+    }
+
+    const chip = m[1];
+
+    // IAR uses "default" / "None" as a placeholder when no device is selected
+    // in a configuration (e.g. a Release config left untouched). Skip it so
+    // it doesn't override the real device resolved from another config.
+    if (chip.toLowerCase() == 'default' || chip.toLowerCase() == 'none')
         return;
 
-    const m = /^(?<name>\w+)\s+(?<clas>\w+)/.exec(rawChipNameStr);
-    if (m && m.groups) {
-        const chip = m.groups['name'];
-        const clas = m.groups['clas'];
-        const devDir = File.fromArray([iarToolRoot.path, 'config', 'devices', clas]);
-        if (devDir.IsDir()) {
-            const fli = devDir.GetAll([/\.i79$/i], File.EXCLUDE_ALL_FILTER);
-            const idx = fli.findIndex(f => f.noSuffixName.toLowerCase() == chip.toLowerCase());
-            if (idx != -1) {
-                try {
-                    return ini.parse(fli[idx].Read());
-                } catch (error) {
-                    GlobalEvent.log_warn(error);
-                }
-            }
+    const devicesRoot = File.fromArray([iarToolRoot.path, 'config', 'devices']);
+    if (!devicesRoot.IsDir()) {
+        console.log('[eide-iar-chip] devicesRoot NOT dir:', devicesRoot.path);
+        return;
+    }
+
+    const fli = devicesRoot.GetAll([/\.i79$/i], File.EXCLUDE_ALL_FILTER);
+    const idx = fli.findIndex(f => f.noSuffixName.toLowerCase() == chip.toLowerCase());
+    console.log('[eide-iar-chip] chip=', chip, 'devicesRoot=', devicesRoot.path, 'i79 count=', fli.length, 'idx=', idx);
+    if (idx != -1) {
+        try {
+            return ini.parse(fli[idx].Read());
+        } catch (error) {
+            console.log('[eide-iar-chip] ini.parse error:', error);
+            GlobalEvent.log_warn(error);
         }
     }
 }
@@ -428,6 +466,16 @@ export const IAR2EIDE_OPTS_MAP: any = {
             'turn-Warning-into-errors': {
                 '0': false,
                 '1': true
+            }
+        },
+        // IAR 9.x new option (absent in the 7.80.2 reference projects used
+        // when this map was written). IccLang=2 means C/C++ mixed build;
+        // without this entry eide silently drops the mixed-mode flag.
+        'ICCARM.IccLang': {
+            'mixed-c-cpp': {
+                '0': false,
+                '1': false,
+                '2': true
             }
         }
     },

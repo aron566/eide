@@ -1215,3 +1215,31 @@ export function getFirstKey(obj: any): string | undefined {
         }
     }
 }
+
+const shortPathCache: Map<string, string> = new Map();
+
+/**
+ * Convert a Windows path containing spaces to its 8.3 short-path form
+ * (e.g. "C:\Program Files\..." -> "C:\PROGRA~1\..."), so downstream tools
+ * that mishandle quoted paths (e.g. iasmarm rejects `-I"path with space"`)
+ * can parse it. No-op on non-Windows or paths without spaces.
+ */
+export function toWinShortPath(path: string): string {
+    if (os.platform() != 'win32' || !path.includes(' ')) return path;
+    const cached = shortPathCache.get(path);
+    if (cached !== undefined) return cached;
+    try {
+        const psCmd = `(New-Object -ComObject Scripting.FileSystemObject).GetFolder(${JSON.stringify(path)}).ShortPath`;
+        const encoded = Buffer.from(psCmd, 'utf16le').toString('base64');
+        const out = child_process.execFileSync(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+            { encoding: 'utf8' }
+        ).trim();
+        const result = out || path;
+        shortPathCache.set(path, result);
+        return result;
+    } catch (error) {
+        return path;
+    }
+}

@@ -2128,6 +2128,21 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                 compilerOpt.scatterFilePath = iarTarget.icfPath;
 
                 //
+                // map the resolved chip core to the JLink flasher device name.
+                // Without this, cpuInfo.cpuName stays "null" and JLink can't
+                // set the device (the IAR import never filled it).
+                //
+                if (iarTarget.core) {
+                    const jlCfg = <any>nEideTarget.uploadConfig;
+                    if (jlCfg && jlCfg.cpuInfo) {
+                        jlCfg.cpuInfo.cpuName = iarTarget.core;      // e.g. "Cortex-M3"
+                        if (iarTarget.chipname) {
+                            jlCfg.cpuInfo.vendor = iarTarget.chipname; // e.g. "ZB204"
+                        }
+                    }
+                }
+
+                //
                 // builder options
                 //
                 const toolchain = ToolchainManager.getInstance().getToolchain(eidePrjCfg.type, eidePrjCfg.toolchain);
@@ -2156,6 +2171,19 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                     }
                 }
 
+                //
+                // Fallback: ewp without IccCppDialect (old IAR/KEIL-style projects)
+                // leaves c/cpp-compiler language-cpp unset, so iccarm compiles
+                // .cpp files without any C++ dialect flag (--c++/--ec++/--eec++),
+                // and C++ syntax errors out. Force a sane default here.
+                //
+                if (!builderConfig['c/cpp-compiler'] || builderConfig['c/cpp-compiler']['language-cpp'] == undefined) {
+                    builderConfig['c/cpp-compiler']['language-cpp'] = 'C++'; // --c++: only C++ dialect flag still valid in IAR 9.x (--ec++/--eec++ were removed)
+                }
+                if (!builderConfig['c/cpp-compiler'] || builderConfig['c/cpp-compiler']['language-c'] == undefined) {
+                    builderConfig['c/cpp-compiler']['language-c'] = 'c11'; // iccarm treats c11 as the closest modern default
+                }
+
                 // copy string options
 
                 const optToString = (obj: string | string[]): string => {
@@ -2178,11 +2206,20 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
 
                     const extraOpts: string[] = [];
 
+                    // IAR 8.x+ RTOS projects (e.g. mbed-os) call __iar_Initlocks(),
+                    // which lives in the thread library (th*tln.a). Without
+                    // --threaded_lib the linker cannot resolve it.
+                    extraOpts.push('--threaded_lib');
+
                     toArray(iarTarget.settings['ILINK.IlinkKeepSymbols'])
                         .forEach(s => extraOpts.push(`--keep ${s}`));
 
                     toArray(iarTarget.settings['ILINK.IlinkDefines'])
                         .forEach(s => extraOpts.push(`--define_symbol ${s}`));
+
+                    // IlinkSuppressDiags (e.g. "Lp005") -> --diag_suppress=<tags>
+                    toArray(iarTarget.settings['ILINK.IlinkSuppressDiags'])
+                        .forEach(tag => extraOpts.push(`--diag_suppress=${tag}`));
 
                     if (iarTarget.settings['ILINK.IlinkUseExtraOptions'] == '1') {
                         toArray(iarTarget.settings['ILINK.IlinkExtraOptions'])

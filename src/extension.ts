@@ -395,6 +395,40 @@ function postLaunchHook(extensionCtx: vscode.ExtensionContext) {
             GlobalEvent.log_error(error);
         }
     }
+
+    // check self extension update (from self-hosted repo) after delay
+    setTimeout(() => {
+        checkExtensionUpdate(extensionCtx).catch(err => GlobalEvent.log_warn(err));
+    }, 15 * 1000);
+}
+
+//
+// check self extension update from self-hosted github repo (aron566/eide)
+//
+async function checkExtensionUpdate(context: vscode.ExtensionContext) {
+
+    try {
+        const curVer: string = context.extension.packageJSON.version;
+        const url = 'https://api.github.com/repos/aron566/eide/releases/latest';
+        const cont = await utility.requestTxt(utility.redirectHost(url));
+        if (typeof cont != 'string') return;
+
+        let release: any;
+        try { release = JSON.parse(cont); } catch { return; }
+        if (!release || typeof release.tag_name != 'string') return;
+
+        const remoteVer = release.tag_name.replace(/^v/i, '').trim();
+        if (!utility.isVersionString(remoteVer)) return;
+        if (utility.compareVersion(remoteVer, curVer) <= 0) return;
+
+        const msg = `eide new version v${remoteVer} (current v${curVer})`;
+        const sel = await vscode.window.showInformationMessage(msg, 'Download', 'Later');
+        if (sel == 'Download') {
+            utility.openUrl(release.html_url || 'https://github.com/aron566/eide/releases/latest');
+        }
+    } catch (error) {
+        // ignore update check errors silently
+    }
 }
 
 //////////////////////////////////////////////////
@@ -415,7 +449,7 @@ async function checkAndInstallBuiltPyPkgs() {
         ? NodePath.join(NodePath.dirname(py3), 'Lib', 'site-packages', 'memap')
         : NodePath.join(resManager.getLegacyBuilderDir().path, 'utils', 'memap');
     if (File.IsDir(memapPath)) {
-        const patchVer = 2;
+        const patchVer = 3;
         const patchFile = File.from(memapPath, '.patch');
         let curVer = -1;
         if (patchFile.IsFile())
@@ -638,7 +672,7 @@ async function tryUpdateBinaries(binFolder: File, localVer?: string): Promise<bo
 
     const getVersionFromRepo = async (): Promise<string | Error | undefined> => {
         try {
-            const url = `https://api.github.com/repos/github0null/eide-resource/contents/binaries/${platform.getRuntimeId()}/VERSION`;
+            const url = `https://api.github.com/repos/aron566/eide-resource/contents/binaries/${platform.getRuntimeId()}/VERSION`;
             const cont = await utility.requestTxt(utility.redirectHost(url));
             if (typeof cont != 'string') return cont;
             let obj: any = undefined;
@@ -652,7 +686,7 @@ async function tryUpdateBinaries(binFolder: File, localVer?: string): Promise<bo
 
     const getAvailableBinariesVersions = async (): Promise<string[] | Error | undefined> => {
         try {
-            const url = `https://api.github.com/repos/github0null/eide-resource/contents/binaries/${platform.getRuntimeId()}`;
+            const url = `https://api.github.com/repos/aron566/eide-resource/contents/binaries/${platform.getRuntimeId()}`;
             const fList = await utility.readGithubRepoFolder(utility.redirectHost(url));
             if (fList instanceof Error) throw fList;
             return fList.filter(f => f.name.startsWith('bin-'))
@@ -717,7 +751,7 @@ async function tryUpdateBinaries(binFolder: File, localVer?: string): Promise<bo
     if (checkBinFolder(binFolder) && preinstallVersion) {
         //TODO
         // if (!notConfirm) {
-        //     const msg = `New update for eide binaries, version: '${preinstallVersion}', [ChangeLog](https://github.com/github0null/eide-resource/pulls?q=is%3Apr+is%3Aclosed), install now ?`;
+        //     const msg = `New update for eide binaries, version: '${preinstallVersion}', [ChangeLog](https://github.com/aron566/eide-resource/pulls?q=is%3Apr+is%3Aclosed), install now ?`;
         //     const sel = await vscode.window.showInformationMessage(msg, 'Yes', 'Later');
         //     if (sel != 'Yes') { return true; } // user canceled
         // }
@@ -733,8 +767,8 @@ async function tryInstallBinaries(binFolder: File, binVersion: string): Promise<
 
     // binaries download site
     let downloadSites: string[] = [
-        `https://raw-github.em-ide.com/github0null/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`,
-        `https://raw.githubusercontent.com/github0null/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`
+        `https://raw-github.em-ide.com/aron566/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`,
+        `https://raw.githubusercontent.com/aron566/eide-resource/master/binaries/${platform.getRuntimeId()}/bin-${binVersion}.${binType}`
     ];
 
     // random order

@@ -552,9 +552,11 @@ export class SettingManager {
 
     getIarForArmDir(): File {
         return new File(
-            this.getFullPathByPluginConfig('IAR.ARM.Toolchain.InstallDirectory') ||
-            this.findGccCompilerRootInSystemEnv('iccarm') ||
-            'null'
+            Utility.toWinShortPath(
+                this.getFullPathByPluginConfig('IAR.ARM.Toolchain.InstallDirectory') ||
+                this.findGccCompilerRootInSystemEnv('iccarm') ||
+                'null'
+            )
         );
     }
 

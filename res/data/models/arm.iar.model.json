@@ -294,9 +294,9 @@
                 "type": "selectable",
                 "command": {
                     "C++": "--c++",
-                    "Embedded-C++": "--ec++",
-                    "Extended-EC++": "--eec++",
-                    "false": "--eec++"
+                    "Embedded-C++": "--c++",
+                    "Extended-EC++": "--c++",
+                    "false": "--c++"
                 }
             },
             "destroy-cpp-static-object": {
