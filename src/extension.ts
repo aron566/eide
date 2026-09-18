@@ -28,6 +28,8 @@ import * as os from 'os';
 import * as node7z from 'node-7z';
 import * as NodePath from 'path';
 import * as ChildProcess from 'child_process';
+import * as https from 'https';
+import * as http from 'http';
 import * as yaml from 'yaml';
 
 import { GlobalEvent } from './GlobalEvents';
@@ -421,14 +423,180 @@ async function checkExtensionUpdate(context: vscode.ExtensionContext) {
         if (!utility.isVersionString(remoteVer)) return;
         if (utility.compareVersion(remoteVer, curVer) <= 0) return;
 
+        // find the vsix asset download url
+        const assets: any[] = release.assets || [];
+        const vsixAsset = assets.find(a => typeof a.name == 'string' && a.name.toLowerCase().endsWith('.vsix'));
+        const downloadUrl = vsixAsset ? vsixAsset.browser_download_url : undefined;
+
         const msg = `eide new version v${remoteVer} (current v${curVer})`;
-        const sel = await vscode.window.showInformationMessage(msg, 'Download', 'Later');
-        if (sel == 'Download') {
+        const sel = await vscode.window.showInformationMessage(msg, 'Install Now', 'Download', 'Later');
+        if (sel == 'Install Now' && downloadUrl) {
+            await autoInstallVsixUpdate(downloadUrl, remoteVer);
+        } else if (sel == 'Download') {
             utility.openUrl(release.html_url || 'https://github.com/aron566/eide/releases/latest');
         }
     } catch (error) {
         // ignore update check errors silently
     }
+}
+
+//
+// download the vsix and install it automatically via vscode
+//
+async function autoInstallVsixUpdate(downloadUrl: string, remoteVer: string) {
+
+    try {
+        const tmpDir = NodePath.join(os.tmpdir(), 'eide-update');
+        if (!fs.existsSync(tmpDir))
+            fs.mkdirSync(tmpDir, { recursive: true });
+
+        const vsixPath = NodePath.join(tmpDir, `eide-${remoteVer}.vsix`);
+
+        // download
+        // NOTE: use Node's native https/http instead of utility.downloadFile, because
+        // NetRequest drops the query string on 302 redirect (github release download
+        // redirects to release-assets.githubusercontent.com with auth query params).
+        const buf = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Downloading eide v${remoteVer} ...`
+        }, async () => {
+            return await downloadWithRedirect(downloadUrl);
+        });
+
+        if (!buf || buf.length == 0) {
+            vscode.window.showErrorMessage(`eide update failed: download error`);
+            return;
+        }
+
+        fs.writeFileSync(vsixPath, buf);
+        GlobalEvent.log_info(`[eide-update] downloaded ${buf.length} bytes -> ${vsixPath}`);
+
+        // install the vsix via the VS Code CLI (workbench.extensions.action.installVSIX
+        // does not accept an argument, so it cannot be driven programmatically)
+        const codeCli = findCodeCli();
+        if (!codeCli) {
+            vscode.window.showErrorMessage(`eide update: VS Code CLI not found, please install manually`);
+            return;
+        }
+        GlobalEvent.log_info(`[eide-update] installing via CLI: ${codeCli}`);
+        await execCodeInstall(codeCli, vsixPath);
+        GlobalEvent.log_info(`[eide-update] install done`);
+
+        // prompt reload
+        const sel = await vscode.window.showInformationMessage(`eide v${remoteVer} installed, reload window to apply ?`, 'Reload Now', 'Later');
+        if (sel == 'Reload Now') {
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+    } catch (error) {
+        const msg = (error instanceof Error)
+            ? (error.message || error.stack || String(error))
+            : JSON.stringify(error);
+        GlobalEvent.log_warn(`[eide-update] install failed: ${msg}`);
+        vscode.window.showErrorMessage(`eide update failed: ${msg}`);
+    }
+}
+
+//
+// download with 302 redirect following, preserving the query string on redirect
+// (github release download redirects to release-assets.githubusercontent.com with
+// auth query params that NetRequest drops)
+//
+function downloadWithRedirect(url: string, redirects = 0): Promise<Buffer | undefined> {
+
+    return new Promise((resolve) => {
+
+        const mod = url.startsWith('https') ? https : http;
+
+        const req = mod.get(url, (res) => {
+            // follow redirect
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                res.resume();
+                if (redirects > 10) {
+                    resolve(undefined);
+                    return;
+                }
+                resolve(downloadWithRedirect(res.headers.location, redirects + 1));
+                return;
+            }
+
+            if (res.statusCode !== 200) {
+                res.resume();
+                resolve(undefined);
+                return;
+            }
+
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+            res.on('error', () => resolve(undefined));
+        });
+
+        req.on('error', () => resolve(undefined));
+        req.setTimeout(120 * 1000, () => {
+            req.destroy();
+            resolve(undefined);
+        });
+    });
+}
+
+//
+// locate the VS Code CLI (code / code.cmd) inside the running app
+//
+function findCodeCli(): string | undefined {
+
+    const appRoot = vscode.env.appRoot;
+    if (!appRoot) {
+        GlobalEvent.log_warn(`[eide-update] vscode.env.appRoot is empty`);
+        return undefined;
+    }
+
+    // appRoot usually points to <install>/resources/app, so the CLI lives at
+    // <install>/bin/code(.cmd). Probe several levels to be robust across layouts.
+    const candidates = [
+        NodePath.join(appRoot, '..', '..', 'bin', 'code.cmd'),
+        NodePath.join(appRoot, '..', '..', 'bin', 'code'),
+        NodePath.join(appRoot, '..', '..', '..', 'bin', 'code.cmd'),
+        NodePath.join(appRoot, '..', '..', '..', 'bin', 'code'),
+        NodePath.join(appRoot, 'bin', 'code.cmd'),
+        NodePath.join(appRoot, 'bin', 'code'),
+    ];
+
+    GlobalEvent.log_info(`[eide-update] appRoot = ${appRoot}`);
+
+    for (const c of candidates) {
+        if (fs.existsSync(c)) {
+            GlobalEvent.log_info(`[eide-update] found CLI: ${c}`);
+            return c;
+        }
+    }
+
+    GlobalEvent.log_warn(`[eide-update] no CLI found under appRoot`);
+    return undefined;
+}
+
+//
+// install a .vsix via `code --install-extension`
+//
+function execCodeInstall(cli: string, vsixPath: string): Promise<void> {
+
+    return new Promise((resolve, reject) => {
+
+        // on Windows, code.cmd is a batch file and must be spawned via cmd.exe /c
+        const isWin = process.platform === 'win32';
+        const cmd = isWin ? 'cmd.exe' : cli;
+        const args = isWin
+            ? ['/c', cli, '--install-extension', vsixPath, '--force']
+            : ['--install-extension', vsixPath, '--force'];
+
+        ChildProcess.execFile(cmd, args,
+            { timeout: 120 * 1000 },
+            (error, _stdout, stderr) => {
+                if (error)
+                    reject(new Error(stderr || error.message));
+                else
+                    resolve();
+            });
+    });
 }
 
 //////////////////////////////////////////////////
