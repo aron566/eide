@@ -322,7 +322,9 @@ export abstract class CodeBuilder {
                 shellOption.shellArgs = ['-c'];
             }
             // setup task
-            const task = new vscode.Task({ type: 'shell', command: commandLine }, vscode.TaskScope.Workspace,
+            // NOTE: command only in ShellExecution, not in the definition (see
+            // utility.sendCommandToTerminal for the same fix).
+            const task = new vscode.Task({ type: 'shell' }, vscode.TaskScope.Workspace,
                 title, 'eide.builder', new vscode.ShellExecution(commandLine, shellOption), []);
             task.group = vscode.TaskGroup.Build;
             task.isBackground = false;

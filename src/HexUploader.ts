@@ -47,6 +47,46 @@ import { StatusBarManager } from "./StatusBarManager";
 
 let _mInstance: HexUploaderManager | undefined;
 
+/**
+ * read the ELF entry point address (e_entry) from an ELF file.
+ * for GCC toolchains this equals the linker script's ENTRY symbol address
+ * (e.g. _start), which is where the CPU must begin executing after download.
+ */
+export function readElfEntry(elfPath: string): number | undefined {
+    try {
+        const buf = fs.readFileSync(elfPath);
+        if (buf.length < 0x20) return undefined;
+        // ELF magic: 0x7f 'E' 'L' 'F'
+        if (buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) return undefined;
+        const is64 = buf[4] === 2; // ELFCLASS64
+        const isLE = buf[5] === 1; // ELFDATA2LSB
+        if (is64) {
+            return Number(isLE ? buf.readBigUInt64LE(0x18) : buf.readBigUInt64BE(0x18));
+        }
+        return isLE ? buf.readUInt32LE(0x18) : buf.readUInt32BE(0x18);
+    } catch (e) {
+        return undefined;
+    }
+}
+
+/**
+ * read the entry point address from a GCC linker map file. GCC's ENTRY is
+ * normally _start; the map lists it as "0x<addr>   _start".
+ */
+export function readMapEntry(project: AbstractProject): number | undefined {
+    try {
+        const mapPath = project.getExecutablePathWithoutSuffix() + '.map';
+        const content = fs.readFileSync(mapPath, 'utf8');
+        const m = /^\s*(0x[0-9a-fA-F]+)\s+_start\s*$/m.exec(content);
+        if (m) {
+            return parseInt(m[1], 16);
+        }
+        return undefined;
+    } catch (e) {
+        return undefined;
+    }
+}
+
 export type HexUploaderType = 'JLink' | 'STVP' | 'STLink' | 'stcgal' | 'pyOCD' | 'OpenOCD' | 'probe-rs' | 'Custom';
 
 export interface UploadOption {
@@ -404,6 +444,9 @@ export interface JLinkOptions extends UploadOption {
     speed?: number;
 
     otherCmds: string;
+
+    /** manual override for the PC value set before 'go' (RISC-V); empty = auto-detect */
+    setPcAddr?: string;
 }
 
 class JLinkUploader extends HexUploader<any> {
@@ -455,10 +498,31 @@ class JLinkUploader extends HexUploader<any> {
                 }
             });
 
-            flasherCmds.push(
-                'r',
-                'go'
-            );
+            flasherCmds.push('r');
+
+            // RISC-V: JLink's 'go' does not position the PC for RISC-V cores
+            // (it ends up at a garbage value such as 0xdeadbeef); set it to the
+            // entry point before running.
+            // Priority: manual setPcAddr -> ELF e_entry -> map _start -> baseAddr.
+            if (this.project.getToolchain().name == 'RISCV_GCC') {
+                // reset may leave the core running; halt it before SetPC
+                flasherCmds.push('halt');
+                if (option.setPcAddr) {
+                    // manual override (user knows the value)
+                    flasherCmds.push(`SetPC ${option.setPcAddr}`);
+                } else {
+                    const elfPath = this.project.getExecutablePathWithoutSuffix() + '.elf';
+                    const entry = readElfEntry(elfPath) ?? readMapEntry(this.project);
+                    if (entry != undefined) {
+                        flasherCmds.push(`SetPC 0x${entry.toString(16)}`);
+                    } else if (option.baseAddr) {
+                        // RISC-V reset vector sits at the firmware base address
+                        flasherCmds.push(`SetPC ${option.baseAddr}`);
+                    }
+                }
+            }
+
+            flasherCmds.push('go');
         }
 
         // erase internal falsh

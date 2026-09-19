@@ -70,7 +70,7 @@ export interface CreateOptions {
     type: ProjectType;
 }
 
-export type ImportProjectIDEType = 'mdk' | 'eclipse' | 'iar';
+export type ImportProjectIDEType = 'mdk' | 'eclipse' | 'iar' | 'cmake';
 
 export interface ImportOptions {
     type: ImportProjectIDEType;

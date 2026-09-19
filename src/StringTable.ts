@@ -182,6 +182,11 @@ export const view_str$flasher$other_cmds = [
     'Extra CommandLine'
 ][langIndex];
 
+export const view_str$flasher$setPcAddr = [
+    '下载后 PC 值 (SetPC)',
+    'PC Value Before Go (SetPC)'
+][langIndex];
+
 //------------------ compile view string----------------
 
 export const view_str$compile$cpuType = [

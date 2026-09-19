@@ -96,7 +96,7 @@ import {
 import { CodeBuilder, BuildOptions } from './CodeBuilder';
 import { ExceptionToMessage, newMessage } from './Message';
 import { SettingManager } from './SettingManager';
-import { FlashCommandResult, HexUploaderManager, HexUploaderType, JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, PyOCDFlashOptions } from './HexUploader';
+import { FlashCommandResult, HexUploaderManager, HexUploaderType, JLinkOptions, JLinkProtocolType, OpenOCDFlashOptions, PyOCDFlashOptions, readElfEntry, readMapEntry } from './HexUploader';
 import { SevenZipper, CompressOption } from './Compress';
 import { DependenceManager } from './DependenceManager';
 import { ArrayDelRepetition } from '../lib/node-utility/Utility';
@@ -138,6 +138,7 @@ import {
     EideDiagnosticCode
 } from './ProblemMatcher';
 import * as iarParser from './IarProjectParser';
+import * as cmakeParser from './CmakeProjectParser';
 import * as ArmCpuUtils from './ArmCpuUtils';
 import { ShellFlasherIndexItem } from './WebInterface/WebInterface';
 import { jsonc } from 'jsonc';
@@ -960,6 +961,30 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
 
         // whole treeview updated
         this.updateStatusBarForActiveProjects();
+    }
+
+    /**
+     * after a build completes, if the JLink uploader targets a RISC-V project
+     * and the SetPC value is still empty, auto-detect the entry point (ELF
+     * e_entry -> map _start) and write it back so the user can see/edit it.
+     */
+    autoFillRiscvSetPc() {
+        try {
+            const prj = this.getActiveProject();
+            if (!prj) return;
+            const cfg = prj.GetConfiguration();
+            if (cfg.config.uploader != 'JLink') return;
+            if (prj.getToolchain().name != 'RISCV_GCC') return;
+            const jlinkOpt = <JLinkOptions>cfg.uploadConfigModel.data;
+            if (jlinkOpt.setPcAddr) return; // already set by the user
+            const elfPath = prj.getExecutablePathWithoutSuffix() + '.elf';
+            const entry = readElfEntry(elfPath) ?? readMapEntry(prj);
+            if (entry != undefined) {
+                cfg.uploadConfigModel.SetKeyValue('setPcAddr', `0x${entry.toString(16)}`);
+            }
+        } catch (e) {
+            // auto-fill is best-effort; ignore errors
+        }
     }
 
     updateStatusBarForActiveProjects() {
@@ -1983,8 +2008,200 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
             case 'iar':
                 this.ImportIarProject(option).catch(err => catchErr(err));
                 break;
+            case 'cmake':
+                this.ImportCmakeProject(option).catch(err => catchErr(err));
+                break;
             default:
                 break;
+        }
+    }
+
+    private async ImportCmakeProject(option: ImportOptions) {
+
+        // option.projectFile is the CMakeLists.txt
+        const cmakeLists = option.projectFile;
+        const rootDir = cmakeLists.dir;
+
+        // locate compile_commands.json
+        let ccPath = cmakeParser.findCompileCommands(rootDir);
+        if (!ccPath) {
+            const ans = await vscode.window.showWarningMessage(
+                `No compile_commands.json found in this CMake project. Run cmake to generate it ?`,
+                'Yes', 'No');
+            if (ans != 'Yes') return;
+            ccPath = await this.runCmakeGenerate(rootDir);
+            if (!ccPath) {
+                vscode.window.showErrorMessage('Failed to generate compile_commands.json');
+                return;
+            }
+        }
+
+        const cmakeInfo = await cmakeParser.parseCompileCommands(ccPath, rootDir);
+        const prjRoot = new File(cmakeInfo.rootDir);
+        const linkConfig = cmakeParser.parseCmakeLinkConfig(cmakeLists.path);
+
+        // map toolchain family -> eide project type
+        let nPrjType: ProjectType = 'ANY-GCC';
+        switch (cmakeInfo.type) {
+            case 'arm':
+                nPrjType = 'ARM';
+                break;
+            case 'riscv':
+                nPrjType = 'RISC-V';
+                break;
+            default:
+                break;
+        }
+
+        const basePrj = AbstractProject.NewProject(getGlobalState()).createBase({
+            name: cmakeInfo.name,
+            projectName: cmakeInfo.name,
+            type: nPrjType,
+            outDir: prjRoot
+        }, false);
+
+        const nPrjConfig = basePrj.prjConfig.config;
+
+        nPrjConfig.virtualFolder = cmakeInfo.virtualSource;
+        nPrjConfig.outDir = 'build';
+
+        // build one target from compile_commands.json
+        const nEideTarget: ProjectTargetInfo = {
+            excludeList: [],
+            toolchain: nPrjConfig.toolchain,
+            toolchainConfig: copyObject(nPrjConfig.toolchainConfig),
+            toolchainConfigMap: copyObject(nPrjConfig.toolchainConfigMap),
+            uploader: nPrjConfig.uploader,
+            uploadConfig: copyObject(nPrjConfig.uploadConfig),
+            uploadConfigMap: copyObject(nPrjConfig.uploadConfigMap),
+            builderOptions: {},
+            cppPreprocessAttrs: {
+                name: 'default',
+                incList: [],
+                defineList: [],
+                libList: []
+            },
+            settings: {}
+        };
+
+        nEideTarget.cppPreprocessAttrs.defineList = cmakeInfo.cMacros;
+        nEideTarget.cppPreprocessAttrs.incList = cmakeInfo.cIncDirs;
+
+        const toolchain = ToolchainManager.getInstance().getToolchain(nPrjConfig.type, nPrjConfig.toolchain);
+        const toolchainDefConf = toolchain.getDefaultConfig();
+
+        // toolchain-specific config
+        if (nEideTarget.toolchain == 'GCC') {
+            const compilerOpt = <ArmBaseCompileData>nEideTarget.toolchainConfig;
+            compilerOpt.cpuType = cmakeInfo.archName || 'Cortex-M3';
+            compilerOpt.floatingPointHardware = ArmCpuUtils.hasFpu(compilerOpt.cpuType) ? 'single' : 'none';
+            compilerOpt.useCustomScatterFile = true;
+            compilerOpt.scatterFilePath = cmakeInfo.linkerScriptPath || '';
+        } else if (nEideTarget.toolchain == 'RISCV_GCC') {
+            const compilerOpt = <RiscvCompileData>nEideTarget.toolchainConfig;
+            compilerOpt.linkerScriptPath = linkConfig.linkerScriptPath || cmakeInfo.linkerScriptPath || '';
+            // arch / abi
+            if (linkConfig.arch) {
+                toolchainDefConf.global = toolchainDefConf.global || {};
+                toolchainDefConf.global['arch'] = linkConfig.arch;
+            }
+            if (linkConfig.abi) {
+                toolchainDefConf.global = toolchainDefConf.global || {};
+                toolchainDefConf.global['abi'] = linkConfig.abi;
+            }
+            // link libm for math functions (sqrt etc.)
+            if (!toolchainDefConf.linker) toolchainDefConf.linker = {};
+            const ldCfg = toolchainDefConf.linker;
+            if (ldCfg['LIB_FLAGS'] != undefined) {
+                ldCfg['LIB_FLAGS'] = ((ldCfg['LIB_FLAGS'] || '') + ' -lm').trim();
+            }
+        } else if (nEideTarget.toolchain == 'ANY_GCC') {
+            const compilerOpt = <AnyGccCompileData>nEideTarget.toolchainConfig;
+            compilerOpt.linkerScriptPath = cmakeInfo.linkerScriptPath || '';
+        }
+
+        // builder config
+        {
+            // generic compiler flags (collected from compile commands)
+            if (cmakeInfo.cCompilerArgs.length > 0) {
+                const ccCfg = toolchainDefConf["c/cpp-compiler"];
+                if (ccCfg) {
+                    const flags = cmakeInfo.cCompilerArgs.join(' ');
+                    if (ccCfg['C_FLAGS'] != undefined) {
+                        ccCfg['C_FLAGS'] = flags;
+                    } else {
+                        ccCfg['misc-control'] = flags;
+                    }
+                }
+            }
+
+            // PRE-build commands (add_custom_target ... COMMAND ...)
+            const preBuildTasks = cmakeParser.parseCmakePreBuild(cmakeLists.path);
+            if (preBuildTasks.length > 0) {
+                if (!toolchainDefConf.beforeBuildTasks) toolchainDefConf.beforeBuildTasks = [];
+                for (const t of preBuildTasks) {
+                    toolchainDefConf.beforeBuildTasks.push({
+                        name: t.name,
+                        command: t.command
+                    });
+                }
+            }
+
+            // POST_BUILD commands from CMakeLists.txt (follow include() chains)
+            const toolchainPrefix = cmakeInfo.compiler.replace(/(?:gcc|g\+\+|cc)(?:\.exe)?$/i, '');
+            const postBuildTasks = cmakeParser.parseCmakePostBuild(cmakeLists.path, toolchainPrefix);
+            if (postBuildTasks.length > 0) {
+                if (!toolchainDefConf.afterBuildTasks) toolchainDefConf.afterBuildTasks = [];
+                for (const t of postBuildTasks) {
+                    toolchainDefConf.afterBuildTasks.push({
+                        name: t.name,
+                        command: t.command
+                    });
+                }
+            }
+
+            nEideTarget.builderOptions[toolchain.name] = toolchainDefConf;
+        }
+
+        nPrjConfig.targets['default'] = nEideTarget;
+        nPrjConfig.mode = 'default';
+
+        // copy target info to project config
+        const curTarget: any = nPrjConfig.targets['default'];
+        for (const name in curTarget) {
+            if (name === 'cppPreprocessAttrs') {
+                nPrjConfig.dependenceList = [{
+                    groupName: 'custom', depList: [curTarget[name]]
+                }];
+                continue;
+            }
+            if (!MAPPED_KEYS_IN_TARGET_INFO.includes(name))
+                continue;
+            (<any>nPrjConfig)[name] = curTarget[name];
+        }
+
+        // save all config
+        basePrj.prjConfig.Save();
+
+        // switch project
+        const selection = await vscode.window.showInformationMessage(
+            view_str$operation$import_done, continue_text, cancel_text);
+        if (selection === continue_text) {
+            WorkspaceManager.getInstance().openWorkspace(basePrj.workspaceFile);
+        }
+    }
+
+    // run cmake to generate compile_commands.json under <root>/build
+    private async runCmakeGenerate(rootDir: string): Promise<string | undefined> {
+        try {
+            const buildDir = NodePath.join(rootDir, 'build');
+            const cmd = `cmake -S "${rootDir}" -B "${buildDir}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`;
+            child_process.execSync(cmd, { encoding: 'utf8', cwd: rootDir });
+            const ccPath = NodePath.join(buildDir, 'compile_commands.json');
+            return fs.existsSync(ccPath) ? ccPath : undefined;
+        } catch (error) {
+            vscode.window.showErrorMessage(`cmake failed: ${(<Error>error).message}`);
+            return undefined;
         }
     }
 
@@ -2058,6 +2275,12 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                 ];
 
                 iarproj.envs['PROJ_DIR'] = needCreateNewDir ? '..' : '.';
+
+                // record the IAR version that saved this project, used to
+                // warn on toolchain-version mismatch at build time
+                if (iarproj.iarVersion) {
+                    iarproj.envs['IAR_VERSION'] = iarproj.iarVersion;
+                }
 
                 for (const key in iarproj.envs) {
                     envCont.push(`${key} = ${iarproj.envs[key]}`);
@@ -2207,9 +2430,14 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                     const extraOpts: string[] = [];
 
                     // IAR 8.x+ RTOS projects (e.g. mbed-os) call __iar_Initlocks(),
-                    // which lives in the thread library (th*tln.a). Without
-                    // --threaded_lib the linker cannot resolve it.
-                    extraOpts.push('--threaded_lib');
+                    // which lives in the thread library (th*tln.a). Only add
+                    // --threaded_lib when the project actually uses the threaded
+                    // runtime library (GRuntimeLibThreads=1); otherwise the
+                    // multi-thread lib pulls in mutex symbols
+                    // (__iar_system_Mtxinit etc.) the project doesn't provide.
+                    if (iarTarget.settings['General.GRuntimeLibThreads'] == '1') {
+                        extraOpts.push('--threaded_lib');
+                    }
 
                     toArray(iarTarget.settings['ILINK.IlinkKeepSymbols'])
                         .forEach(s => extraOpts.push(`--keep ${s}`));
@@ -3295,6 +3523,10 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             vscode.tasks.onDidEndTask((t) => {
                 if (['eide.flasher', 'eide.builder'].includes(t.execution.task.source)) {
                     this.dataProvider.updateStatusBarForActiveProjects();
+                }
+                // after a build: auto-fill the RISC-V SetPC value if empty
+                if (t.execution.task.source == 'eide.builder') {
+                    this.dataProvider.autoFillRiscvSetPc();
                 }
             }));
 
@@ -7638,6 +7870,29 @@ export class ProjectExplorer implements CustomConfigurationProvider {
             debugConfig.toolchainPrefix = undefined;
         }
 
+        // IAR_ARM ships no gdb; use GCC's arm-none-eabi-gdb for cortex-debug
+        if (toolchain.name == 'IAR_ARM') {
+            const gccDir = SettingManager.GetInstance().getGCCDir();
+            if (gccDir && gccDir.IsDir()) {
+                debugConfig.armToolchainPath = NodePath.join(gccDir.path, 'bin');
+            }
+        }
+
+        // RISC-V: verified working sequence (J-Link V4 + Nuclei N205).
+        // Empty overrideLaunchCommands suppresses cortex-debug's default launch
+        // sequence (its 'monitor reset' makes the RISC-V core run away).
+        if (toolchain.name == 'RISCV_GCC') {
+            debugConfig.overrideLaunchCommands = [];
+            debugConfig.postLaunchCommands = [
+                'monitor reset halt',
+                'set $pc = _start'
+            ];
+            debugConfig.overrideResetCommands = [
+                'monitor reset 0',
+                'set $pc = _start'
+            ];
+        }
+
         /* set svd file */
         const device = prj.GetPackManager().getCurrentDevInfo();
         if (device && device.svdPath && debugConfig.svdFile == undefined) {
@@ -7703,10 +7958,10 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 name: isChinese ? '接口类型' : 'Interface',
                 attrs: {},
                 data: <SimpleUIConfigData_options>{
-                    value: debugConfig.interface == 'swd' ? 0 : 1,
+                    value: debugConfig.interface == 'swd' ? 0 : (debugConfig.interface == 'cjtag' ? 2 : 1),
                     default: 0,
-                    enum: ['swd', 'jtag'],
-                    enumDescriptions: ['SWD', 'JTAG'],
+                    enum: ['swd', 'jtag', 'cjtag'],
+                    enumDescriptions: ['SWD', 'JTAG', 'CJTAG'],
                 }
             };
             ui.items['device'] = {
@@ -7719,7 +7974,7 @@ export class ProjectExplorer implements CustomConfigurationProvider {
                 },
             };
             uiResultConv = (data, outConfig) => {
-                outConfig.interface = ['swd', 'jtag'][data.items['interface'].data.value];
+                outConfig.interface = ['swd', 'jtag', 'cjtag'][data.items['interface'].data.value];
                 outConfig.device = data.items['device'].data.value;
             };
         }

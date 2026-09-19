@@ -544,6 +544,11 @@ export class OperationExplorer {
                 label: 'Eclipse',
                 description: 'embedded gcc projects',
                 detail: `Import Eclipse Projects`
+            },
+            {
+                label: 'CMake',
+                description: 'cmake projects',
+                detail: `Import CMake Projects (from CMakeLists.txt)`
             }
         ], { placeHolder: `Select Project Type` });
 
@@ -671,6 +676,34 @@ export class OperationExplorer {
 
             const importOpts: ImportOptions = {
                 type: 'iar',
+                projectFile: new File(prjFileUri[0].fsPath),
+                createNewFolder: false
+            };
+
+            // emit event
+            this.emit('request_import_project', importOpts);
+        }
+
+        //
+        // for CMake projects
+        //
+        else if (ideType.label == 'CMake') {
+
+            const prjFileUri = await vscode.window.showOpenDialog({
+                openLabel: 'Import',
+                canSelectFolders: false,
+                canSelectFiles: true,
+                canSelectMany: false,
+                filters: {
+                    'CMakeLists': ['txt']
+                }
+            });
+
+            if (!prjFileUri || prjFileUri.length == 0)
+                return;
+
+            const importOpts: ImportOptions = {
+                type: 'cmake',
                 projectFile: new File(prjFileUri[0].fsPath),
                 createNewFolder: false
             };

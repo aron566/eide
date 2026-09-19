@@ -115,6 +115,8 @@ export async function activate(context: vscode.ExtensionContext) {
     subscriptions.push(vscode.commands.registerCommand('eide.ShowUUID', () => ShowUUID()));
     subscriptions.push(vscode.commands.registerCommand('eide.c51ToSdcc', () => c51ToSDCC()));
     subscriptions.push(vscode.commands.registerCommand('eide.ReloadJlinkDevs', () => reloadJlinkDevices()));
+    subscriptions.push(vscode.commands.registerCommand('eide.SelectJlinkInstall', () => SettingManager.instance().selectJlinkInstallDir()));
+    subscriptions.push(vscode.commands.registerCommand('eide.SelectIarForArmInstall', () => SettingManager.instance().selectIarForArmDir()));
     subscriptions.push(vscode.commands.registerCommand('eide.ReloadStm8Devs', () => reloadStm8Devices()));
     subscriptions.push(vscode.commands.registerCommand('eide.create.clang-format.file', () => newClangFormatFile()));
     subscriptions.push(vscode.commands.registerCommand('eide.cleanCache', () => cleanCache()));
@@ -2194,6 +2196,7 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
             case 'AC5':
             case 'AC6':
             case 'GCC':
+            case 'IAR_ARM':
                 if (!toolchainManager.isToolchainPathReady('GCC')) {
                     const msg = view_str$prompt$not_found_compiler.replace('{}', 'arm-none-eabi-gcc');
                     ResInstaller.instance().setOrInstallTools('GCC', msg, 'EIDE.ARM.GCC.InstallDirectory');
@@ -2277,6 +2280,7 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
                 case 'AC5':
                 case 'AC6':
                 case 'GCC':
+                case 'IAR_ARM':
                     dbgCfg['toolchainPrefix'] = settingManager.getGCCPrefix().replace(/-$/, '');
                     dbgCfg['armToolchainPath'] = NodePath.join(settingManager.getGCCDir().path, 'bin');
                     break;
@@ -2362,7 +2366,8 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
             const flasherCfg = (<JLinkOptions>flasherOpts);
             dbgCfg['name'] = 'Cortex-Debug: JLINK';
             dbgCfg['servertype'] = 'jlink';
-            dbgCfg['interface'] = flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag' : 'swd';
+            dbgCfg['interface'] = flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag'
+                : (flasherCfg.proType == JLinkProtocolType.cJTAG ? 'cjtag' : 'swd');
             dbgCfg['device'] = flasherCfg.cpuInfo.cpuName;
             dbgCfg['serverpath'] = jlinkGdbServerPath;
             if (flasherCfg.otherCmds) {
@@ -2381,6 +2386,23 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
                         ? m[1].substring(1, m[1].length - 1)
                         : m[1];
             }
+            // RISC-V: cortex-debug's default download does not position the PC
+            // for RISC-V cores; reset+hault then force the PC to _start before
+            // the go. Verified working sequence (J-Link V4 + Nuclei N205).
+            if (prj.getToolchain().name == 'RISCV_GCC') {
+                // empty overrideLaunchCommands suppresses cortex-debug's default
+                // launch sequence (its 'monitor reset' makes RISC-V run away)
+                dbgCfg['overrideLaunchCommands'] = [];
+                dbgCfg['postLaunchCommands'] = [
+                    'monitor reset halt',
+                    'set $pc = _start'
+                ];
+                dbgCfg['overrideResetCommands'] = [
+                    'monitor reset 0',
+                    'set $pc = _start'
+                ];
+            }
+
             result.push(dbgCfg);
             result.push(newAttachDebugCfg(dbgCfg));
             // For CDT GDB Debug Adapter
@@ -2401,7 +2423,8 @@ class ExternalDebugConfigProvider implements vscode.DebugConfigurationProvider {
                 "cwd": projectCwd,
                 "serverParameters": [
                     "-singlerun", "-nogui",
-                    "-if", flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag' : 'swd',
+                    "-if", flasherCfg.proType == JLinkProtocolType.JTAG ? 'jtag'
+                        : (flasherCfg.proType == JLinkProtocolType.cJTAG ? 'cjtag' : 'swd'),
                     "-port", "50100",
                     // "-swoport", "50101",
                     // "-telnetport", "50102",

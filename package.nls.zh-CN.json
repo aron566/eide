@@ -10,6 +10,8 @@
     "eide.function.show.uuid": "查看 UUID",
     "eide.function.convert.keil.to.sdcc": "将 Keil_C51 寄存器声明转换为 SDCC 格式",
     "eide.function.reload.jlink.dev.list": "重新加载 JLink 芯片信息列表",
+    "eide.function.select.jlink.install": "扫描并选择 JLink 安装目录",
+    "eide.function.select.iar.arm.install": "扫描并选择 IAR ARM 工具链",
     "eide.function.reload.stm8.dev.list": "重新加载 STM8 芯片信息列表",
     "eide.function.reinstall.binaries": "重新安装 eide binaries",
     "eide.function.gen_clang_format": "新建 .clang-format 代码格式化配置模板",

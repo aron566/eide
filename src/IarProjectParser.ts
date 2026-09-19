@@ -42,6 +42,10 @@ export interface IarProjectInfo {
     targets: { [name: string]: IarProjectTarget };
 
     fileGroups: VirtualFolder;
+
+    // IAR product version that last saved this project (OGLastSavedByProductVersion),
+    // used to detect toolchain-version mismatch at build time
+    iarVersion?: string;
 }
 
 export interface IarWorkbenchInfo {
@@ -164,6 +168,17 @@ export async function parseIarWorkbench(ewwFile: File, iarToolchainRoot: File): 
                     target.chipname = chipInf['CHIP'].name;
                     target.core = chipInf['CORE'].name;
                 }
+            }
+        }
+
+        // read the IAR product version that last saved this project
+        // (OGLastSavedByProductVersion) so we can warn on toolchain-version mismatch
+        for (const tname in project.targets) {
+            const t = project.targets[tname];
+            const ver = t.settings['General.OGLastSavedByProductVersion'];
+            if (typeof ver == 'string' && ver) {
+                project.iarVersion = ver;
+                break;
             }
         }
 

@@ -10,6 +10,8 @@
     "eide.function.show.uuid": "Show UUID",
     "eide.function.convert.keil.to.sdcc": "Convert Keil_C51 Registers To SDCC Format",
     "eide.function.reload.jlink.dev.list": "Reload JLink Devices List",
+    "eide.function.select.jlink.install": "Scan & Select JLink Install",
+    "eide.function.select.iar.arm.install": "Scan & Select IAR ARM Toolchain",
     "eide.function.reload.stm8.dev.list": "Reload STM8 Devices List",
     "eide.function.reinstall.binaries": "Reinstall eide binaries",
     "eide.function.gen_clang_format": "Create new .clang-format template file",

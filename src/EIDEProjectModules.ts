@@ -31,6 +31,7 @@ import {
     view_str$flasher$external_loader,
     view_str$flasher$resetMode,
     view_str$flasher$other_cmds,
+    view_str$flasher$setPcAddr,
     view_str$flasher$stcgalOptions,
     view_str$compile$archExtensions,
     view_str$flasher$eraseAll
@@ -270,8 +271,12 @@ export abstract class ConfigModel<DataType> {
             case 'INPUT':
             case 'INPUT_INTEGER':
                 {
+                    const displayVal = this.getKeyValue(key);
                     const val = await vscode.window.showInputBox({
-                        value: (<any>this.data)[key],
+                        // prefill with the current display value (e.g. ${ExecutableName}.hex)
+                        // instead of leaving it empty when the raw value is blank
+                        value: (displayVal && displayVal != 'null') ? displayVal : '',
+                        placeHolder: '${workspaceFolder}  ${ProjectRoot}  ${OutDir}  ${ProjectName}  ${ExecutableName}  ${ConfigName}  ${ToolchainRoot}',
                         ignoreFocusOut: true,
                         validateInput: (input: string): string | undefined => {
                             return this.VerifyString(key, input);
@@ -2133,6 +2138,8 @@ class JLinkUploadModel extends UploadConfigModel<JLinkOptions> {
                 return view_str$flasher$baseAddr;
             case 'otherCmds':
                 return view_str$flasher$other_cmds;
+            case 'setPcAddr':
+                return view_str$flasher$setPcAddr;
             default:
                 return super.GetKeyDescription(key);
         }
@@ -2158,6 +2165,7 @@ class JLinkUploadModel extends UploadConfigModel<JLinkOptions> {
             case 'proType':
             case 'bin':
             case 'otherCmds':
+            case 'setPcAddr':
                 return true;
             case 'baseAddr':
                 return /\.bin\b/i.test(this.data.bin);
@@ -2174,6 +2182,8 @@ class JLinkUploadModel extends UploadConfigModel<JLinkOptions> {
                 return (this.data.speed ? this.data.speed.toString() : '4000') + ' kHz';
             case 'cpuInfo':
                 return this.data.cpuInfo.cpuName;
+            case 'setPcAddr':
+                return this.data.setPcAddr || '';
             default:
                 return super.getKeyValue(key);
         }
@@ -2190,6 +2200,7 @@ class JLinkUploadModel extends UploadConfigModel<JLinkOptions> {
                 return 'SELECTION';
             case 'baseAddr':
             case 'otherCmds':
+            case 'setPcAddr':
                 return 'INPUT';
             case 'speed':
                 return 'INPUT_INTEGER';
@@ -2248,7 +2259,8 @@ class JLinkUploadModel extends UploadConfigModel<JLinkOptions> {
             },
             proType: JLinkProtocolType.SWD,
             speed: 8000,
-            otherCmds: ''
+            otherCmds: '',
+            setPcAddr: ''
         };
     }
 }

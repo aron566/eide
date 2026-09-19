@@ -457,6 +457,63 @@ export class SettingManager {
             || 'null';
     }
 
+    //
+    // scan common install locations for JLink versions (e.g. JLink_V796g, JLink_V946).
+    // returns a list of dirs that contain JLink.exe, newest-friendly (unsorted).
+    //
+    scanJlinkInstallDirs(): string[] {
+
+        const dirs: string[] = [];
+        if (osType() !== 'win32')
+            return dirs;
+
+        const roots = [
+            'C:\\Program Files\\SEGGER',
+            'C:\\Program Files (x86)\\SEGGER',
+        ];
+
+        for (const root of roots) {
+            const rootDir = new File(root);
+            if (!rootDir.IsDir())
+                continue;
+            // list JLink* subdirs only (fileFilter [] => no files)
+            rootDir.GetList([], [/^JLink/i]).forEach(d => {
+                const jlinkExe = new File(NodePath.join(d.path, 'JLink.exe'));
+                if (jlinkExe.IsFile())
+                    dirs.push(d.path);
+            });
+        }
+
+        return dirs;
+    }
+
+    //
+    // scan JLink installs; if multiple, let the user pick one via QuickPick,
+    // then persist it to EIDE.JLink.InstallDirectory.
+    //
+    async selectJlinkInstallDir(): Promise<boolean> {
+
+        const dirs = this.scanJlinkInstallDirs();
+        if (dirs.length == 0) {
+            vscode.window.showWarningMessage('[eide] No JLink installation found in common locations. Set "EIDE.JLink.InstallDirectory" manually.');
+            return false;
+        }
+
+        let selected: string;
+        if (dirs.length == 1) {
+            selected = dirs[0];
+        } else {
+            const sel = await vscode.window.showQuickPick(dirs, { placeHolder: 'Select a JLink version to use' });
+            if (!sel)
+                return false;
+            selected = sel;
+        }
+
+        this.setConfigValue('JLink.InstallDirectory', selected);
+        vscode.window.showInformationMessage(`[eide] JLink set to: ${selected}`);
+        return true;
+    }
+
     getJlinkExePath(): string {
         const dir = this.getJlinkDir();
         const name = osType() === 'win32' ? 'JLink.exe' : 'JLinkExe';
@@ -558,6 +615,66 @@ export class SettingManager {
                 'null'
             )
         );
+    }
+
+    //
+    // scan common install locations for IAR ARM toolchains (e.g. Embedded Workbench 8.2, ewarm-9.70.1).
+    // returns a list of `<iar>/arm` dirs that contain bin\iccarm.exe.
+    //
+    scanIarForArmDirs(): string[] {
+
+        const dirs: string[] = [];
+        if (osType() !== 'win32')
+            return dirs;
+
+        const roots = [
+            'C:\\Program Files\\IAR Systems',
+            'C:\\Program Files (x86)\\IAR Systems',
+            'C:\\iar',
+        ];
+
+        for (const root of roots) {
+            const rootDir = new File(root);
+            if (!rootDir.IsDir())
+                continue;
+            // IAR ARM installs follow `<root>/<version>/arm/bin/iccarm.exe`
+            rootDir.GetList().forEach(f => {
+                if (!f.IsDir())
+                    return;
+                const iccarm = new File(NodePath.join(f.path, 'arm', 'bin', 'iccarm.exe'));
+                if (iccarm.IsFile())
+                    dirs.push(NodePath.join(f.path, 'arm'));
+            });
+        }
+
+        return dirs;
+    }
+
+    //
+    // scan IAR ARM installs; if multiple, let the user pick one via QuickPick,
+    // then persist it to EIDE.IAR.ARM.Toolchain.InstallDirectory.
+    //
+    async selectIarForArmDir(): Promise<boolean> {
+
+        const dirs = this.scanIarForArmDirs();
+        if (dirs.length == 0) {
+            vscode.window.showWarningMessage('[eide] No IAR ARM toolchain found in common locations. Set "EIDE.IAR.ARM.Toolchain.InstallDirectory" manually.');
+            return false;
+        }
+
+        let selected: string;
+        if (dirs.length == 1) {
+            selected = dirs[0];
+        } else {
+            const sel = await vscode.window.showQuickPick(dirs, { placeHolder: 'Select an IAR ARM toolchain version to use' });
+            if (!sel)
+                return false;
+            selected = sel;
+        }
+
+        this.setConfigValue('IAR.ARM.Toolchain.InstallDirectory', selected);
+        vscode.window.showInformationMessage(`[eide] IAR ARM toolchain set to: ${selected}`);
+        return true;
     }
 
     //---------------------------- ARM ----------------------------

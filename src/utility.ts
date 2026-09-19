@@ -768,7 +768,12 @@ export async function sendCommandToTerminal(title: string, commandLine: string, 
                 shellOption.shellArgs = ['-c'];
             }
             // init task
-            const task = new vscode.Task({ type: 'shell', command: commandLine }, vscode.TaskScope.Global,
+            // NOTE: put the command only in ShellExecution, NOT in the task
+            // definition -- VSCode serializes the definition into the task
+            // history and a command with quotes/commas there loses its
+            // 'command' field, producing "neither specifies a command nor a
+            // dependsOn property" warnings on reload.
+            const task = new vscode.Task({ type: 'shell' }, vscode.TaskScope.Global,
                 title, opts?.source || 'eide', new vscode.ShellExecution(commandLine, shellOption), []);
             task.isBackground = false;
             task.presentationOptions = {

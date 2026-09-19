@@ -3354,6 +3354,35 @@ $(OUT_DIR):
             return false;
         }
 
+        // IAR_ARM: warn on toolchain-version mismatch with the project's saved version
+        if (toolchain.name == 'IAR_ARM') {
+            try {
+                const envFile = this.getEnvFile(true);
+                if (envFile.IsFile()) {
+                    const envCfg = ini.parse(envFile.Read());
+                    const savedVer = envCfg['IAR_VERSION'];
+                    if (typeof savedVer == 'string' && savedVer) {
+                        const tcFolder = toolchainManager.getToolchainExecutableFolder('IAR_ARM');
+                        if (!tcFolder)
+                            throw new Error('IAR toolchain folder not found');
+                        const iccarm = File.fromArray([tcFolder.path, `iccarm${platform.exeSuffix()}`]).path;
+                        const verOut = child_process.execFileSync(iccarm, ['--version'], { encoding: 'utf8' });
+                        const m = /V(\d+)\.(\d+)/.exec(verOut);
+                        if (m) {
+                            const savedMajor = parseInt(savedVer.split('.')[0]);
+                            const curMajor = parseInt(m[1]);
+                            if (!isNaN(savedMajor) && !isNaN(curMajor) && savedMajor != curMajor) {
+                                vscode.window.showWarningMessage(
+                                    `[eide] IAR toolchain version mismatch: this project was saved by IAR v${savedVer}, but the current toolchain is v${m[1]}.${m[2]}. Build may fail due to version differences (e.g. __disable_fiq / time_t). Consider switching 'EIDE.IAR.ARM.Toolchain.InstallDirectory' to the matching IAR version.`);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                // ignore version-check errors
+            }
+        }
+
         return true;
     }
 
