@@ -6,6 +6,18 @@ All notable version changes will be recorded in this file.
 
 ***
 
+### [v3.27.14] revision
+
+**Fix**:
+  - `Eclipse import`: CDT source-entry union semantics are now honored — re-added child source entries (e.g. entry `name="src/app"` re-including a folder excluded by the root entry) are no longer swallowed by the flat exclude list; per-entry `excluding` paths are resolved against their entry path and kept for re-added folders.
+  - `Eclipse import`: options of the **C++ Linker** tool (script files `-T`, `-nostartfiles`, `-nodefaultlibs`, libraries `-l`, other linker flags) are imported. Previously only tools named `*C Linker` were handled, so RISC-V projects linking with `g++` lost their linker script and flags.
+  - `Eclipse import`: RISC-V ISA/ABI options (`target.isa.base/multiply/atomic/fp.*/compressed`, `abi.integer`) are merged into the toolchain `arch`/`abi` settings (e.g. `rv32i`+M+C → `rv32imc`), instead of falling back to the default `rv32imac`.
+  - `Eclipse import`: when the target workspace is the one already open in this window, the window is reloaded instead of `vscode.openFolder` being a silent no-op.
+  - `Eclipse import`: unset language standards no longer force strict `c11`; the toolchain default is kept. The RISC-V GCC default C standard is now `gnu11` (gcc's own default), so newlib GNU extensions (e.g. `TIMEVAL_TO_TIMESPEC`) stay visible.
+  - `Builder`: bundled `unify_builder`/`axf2elf`/`serial_monitor`/`verchk` runtimeconfig files set `rollForward: LatestMajor`, and EIDE now launches them through the `dotnet` host on all platforms, so they run on machines with only newer .NET runtimes installed (the apphost's missing-.NET-6 error is misleadingly reported as a `runtimeconfig.json` parse failure).
+
+***
+
 ### [v3.27.2] revision
 
 **Fix**:

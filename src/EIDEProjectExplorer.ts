@@ -2655,6 +2655,18 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
                 // glob
                 toolchainDefConf.global['misc-control'] = eTarget.builldArgs.globalArgs.filter(a => a.trim() != '');
 
+                // riscv arch / abi (e.g. rv32imc + ilp32) detected from the isa options
+                if (nEideTarget.toolchain == 'RISCV_GCC') {
+                    if (eTarget.archName) {
+                        toolchainDefConf.global = toolchainDefConf.global || {};
+                        toolchainDefConf.global['arch'] = eTarget.archName;
+                    }
+                    if (eTarget.riscvAbi) {
+                        toolchainDefConf.global = toolchainDefConf.global || {};
+                        toolchainDefConf.global['abi'] = eTarget.riscvAbi;
+                    }
+                }
+
                 // asm
                 {
                     let flags: string[] = [];
@@ -2680,6 +2692,9 @@ class ProjectDataProvider implements vscode.TreeDataProvider<ProjTreeItem>, vsco
 
                     if (eTarget.builldArgs.optimization)
                         ccCfg['optimization'] = eTarget.builldArgs.optimization;
+                    // when the eclipse project sets no language standard, keep the
+                    // toolchain default instead of forcing a strict one (e.g. c11
+                    // hides gnu extensions like newlib's TIMEVAL_TO_TIMESPEC)
                     if (eTarget.builldArgs.cLanguageStd)
                         ccCfg['language-c'] = eTarget.builldArgs.cLanguageStd;
                     if (eTarget.builldArgs.cppLanguageStd)

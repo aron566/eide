@@ -248,18 +248,21 @@ export function generateRandomStr(len?: number): string {
 }
 
 export function generateDotnetProgramCmd(programFile: File, args?: string[]): string {
-    // 在非 win32 平台上，使用 dotnet 命令去直接执行程序的本体.
-    // 命令 "<my_program>.exe" 的等价替换是 "dotnet <my_program_dir>/<my_program>.dll"
-    if (platform.osType() != 'win32') {
-        let dllpath = [programFile.dir, `${programFile.noSuffixName}.dll`].join('/');
-        let commandLine = `dotnet ${CmdLineHandler.quoteString(File.ToLocalPath(dllpath), '"')}`;
-        args?.forEach(p => {
-            commandLine += ' ' + CmdLineHandler.quoteString(p, '"');
-        });
-        return commandLine;
-    } else {
-        return CmdLineHandler.getCommandLine(programFile.noSuffixName, args || []);
-    }
+    // Always launch .NET programs through the 'dotnet' host, including win32.
+    // Reason: the apphost (.exe) only probes for the exact framework version
+    // baked into runtimeconfig.json (e.g. Microsoft.NETCore.App 6.0). On hosts
+    // with only newer runtimes installed (8/9/10), the apphost fails with a
+    // misleading "Failed to parse file ... runtimeconfig.json. JSON parsing
+    // exception" error. The 'dotnet' host honors runtimeOptions.rollForward
+    // (added to the bundled runtimeconfig.json files), so it can run the
+    // net6.0 builder on newer runtimes.
+    // Command equivalent of "<my_program>.exe" is "dotnet <my_program_dir>/<my_program>.dll"
+    let dllpath = [programFile.dir, `${programFile.noSuffixName}.dll`].join('/');
+    let commandLine = `dotnet ${CmdLineHandler.quoteString(File.ToLocalPath(dllpath), '"')}`;
+    args?.forEach(p => {
+        commandLine += ' ' + CmdLineHandler.quoteString(p, '"');
+    });
+    return commandLine;
 }
 
 export function timeStamp(): string {

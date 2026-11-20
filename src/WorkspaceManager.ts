@@ -91,6 +91,20 @@ export class WorkspaceManager {
      * @param workspaceFile '.code-workspace' file or a folder
     */
     openWorkspace(workspaceFile: File) {
+        // when the target is the workspace this window already has open,
+        // 'vscode.openFolder' is a silent no-op and the extension host keeps
+        // the stale project state. reload the window instead so the newly
+        // generated project files are picked up.
+        const curWsFile = this.getWorkspaceFile();
+        const sameWorkspace = curWsFile != undefined &&
+            File.normalize(curWsFile.path) == File.normalize(workspaceFile.path);
+        const sameFolder = curWsFile == undefined &&
+            this.hasWorkspaces() &&
+            File.normalize(this.getWorkspaceList()[0].path) == File.normalize(workspaceFile.path);
+        if (sameWorkspace || sameFolder) {
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+            return;
+        }
         vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(workspaceFile.path));
     }
 

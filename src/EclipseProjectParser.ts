@@ -24,9 +24,11 @@ export interface EclipseBuilderArgs {
     // "level-0", "level-1", "level-2", "level-3", "level-size", "level-size-Oz", "level-fast", "level-debug"
     optimization: string;
     // "c89", "c90", "c99", "c11", "c17", "c23", "gnu89", "gnu90", "gnu99", "gnu11", "gnu17", "gnu23"
-    cLanguageStd: string;
+    // undefined when the eclipse project sets no language standard
+    cLanguageStd?: string;
     // "c++98", "gnu++98", "c++11", "gnu++11", "c++14", "gnu++14", "c++17", "gnu++17", "c++20", "gnu++20", "c++23", "gnu++23"
-    cppLanguageStd: string;
+    // undefined when the eclipse project sets no language standard
+    cppLanguageStd?: string;
     // Signed Char (-fsigned-char)
     signedChar: boolean;
 
@@ -51,6 +53,7 @@ export interface EclipseProjectTarget {
     builldArgs: EclipseBuilderArgs;
     sourceArgs: { [path: string]: EclipseBuilderArgs };
     archName?: string;
+    riscvAbi?: string;
     linkerScriptPath?: string;
     objsOrder: string[];
 }
@@ -58,8 +61,8 @@ export interface EclipseProjectTarget {
 function newEclipseBuilderArgs(): EclipseBuilderArgs {
     return {
         optimization: 'level-debug',
-        cLanguageStd: 'c11',
-        cppLanguageStd: 'c++11',
+        cLanguageStd: undefined,
+        cppLanguageStd: undefined,
         signedChar: false,
         globalArgs: [],
         cIncDirs: [],
@@ -194,6 +197,9 @@ export async function parseEclipseProject(cprojectPath: string): Promise<Eclipse
 
         GlobalEvent.log_info(`[EclipseParser] target: "${cTarget.$['name']}"`);
 
+        // riscv isa fragments collected from the root resource's options
+        const riscvArch: { base?: string, exts: Set<string>, abi?: string } = { exts: new Set() };
+
         for (const resourceInfo of toArray(cTarget.folderInfo).concat(toArray(cTarget.fileInfo))) {
 
             const folderPath = formatFilePath(resourceInfo.$['resourcePath'] || '').trim();
@@ -220,6 +226,12 @@ export async function parseEclipseProject(cprojectPath: string): Promise<Eclipse
                     } else if (opVal.type == 'archName') {
                         if (isRootResource)
                             tInfo.archName = opVal.val[0];
+                    } else if (opVal.type == 'riscvArchBase') {
+                        if (isRootResource) riscvArch.base = opVal.val[0];
+                    } else if (opVal.type == 'riscvArchExt') {
+                        if (isRootResource) riscvArch.exts.add(opVal.val[0]);
+                    } else if (opVal.type == 'riscvAbi') {
+                        if (isRootResource) riscvArch.abi = opVal.val[0];
                     } else if (opVal.type == 'linkerLibSearchDirs') {
                         if (isRootResource)
                             builderArgs.linkerLibSearchDirs = opVal.val;
@@ -302,7 +314,11 @@ export async function parseEclipseProject(cprojectPath: string): Promise<Eclipse
                 }
 
                 // for linker
-                else if (toolOptName.includes('C Linker')) {
+                // note: match 'C Linker' with a word-ish boundary so the C++
+                // linker ("GNU RISC-V Cross C++ Linker") is also handled: CDT
+                // projects commonly place -T scripts, -nostartfiles, -l libs
+                // and other linker flags on the C++ linker tool
+                else if (/C(?:\+\+)? Linker/.test(toolOptName)) {
                     toArray(toolOpts.option).forEach(op => {
                         const opVal = parseToolOption(op, PROJ_INFO.type);
                         if (opVal) {
@@ -337,33 +353,118 @@ export async function parseEclipseProject(cprojectPath: string): Promise<Eclipse
             }
         }
 
+        // merge riscv isa fragments (e.g. rv32i + m + c) into an arch string (e.g. rv32imc)
+        if (riscvArch.base) {
+            const extOrder = ['i', 'm', 'a', 'f', 'd', 'q', 'c'];
+            const exts = extOrder.filter(e => riscvArch.exts.has(e));
+            const others = Array.from(riscvArch.exts).filter(e => !extOrder.includes(e)).sort();
+            tInfo.archName = riscvArch.base + exts.join('') + others.join('');
+            if (riscvArch.abi)
+                tInfo.riscvAbi = riscvArch.abi;
+        }
+
         if (Array.isArray(cTarget.sourceEntries) && typeof cTarget.sourceEntries[0] == 'object') {
+
+            /**
+             * In CDT, 'excluding' only filters the contents of its own source entry,
+             * and a more specific source entry (e.g. name="src/app") re-includes
+             * anything filtered out by an ancestor entry
+             * (e.g. name="" excluding="src|src/app").
+             * EIDE's excludeList has no such hierarchy, so collect all entries
+             * first, then let the most specific entry decide for each path.
+             */
+            const sourceEntries: { srcdir: string, excludes: string[] }[] = [];
+            const rootVirtualSrcsOfTarget: string[] = [];
+            const rootSrcDirsOfTarget: string[] = [];
+
+            // an 'excluding' path of an entry is relative to that entry's path
+            const resolveExcludePath = (srcdir: string, exclude: string): string => {
+                if (!srcdir || srcdir == '.' || File.isAbsolute(exclude))
+                    return exclude;
+                return `${srcdir}/${exclude}`;
+            };
+
+            // whether 'path' is at or under 'dir'
+            const isCoveredBy = (path: string, dir: string): boolean =>
+                path == dir || path.startsWith(dir + '/');
 
             toArray(cTarget.sourceEntries[0].entry).forEach(e => {
 
                 //<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="src" />
-                if (<string>e.$['kind'] == 'sourcePath') {
-                    const srcdir = formatFilePath(e.$['name']);
-                    if (srcdir == '.' || srcdir == '') {
-                        const srcs = cprojectDir.GetList(SRC_FILE_FILTER, [/^[^\.].+/]);
-                        srcs.forEach(src => {
-                            if (src.IsFile()) {
-                                root_virtualsrcs.push(src.name);
-                            } else {
-                                root_srcdirs.push(src.name);
-                            }
-                        });
-                    } else {
-                        root_srcdirs.push(srcdir);
-                    }
+                if (<string>e.$['kind'] != 'sourcePath') return;
+
+                const srcdir = formatFilePath(e.$['name']);
+                const excludes = (<string>e.$['excluding'] || '')
+                    .split('|').filter(s => s.trim() != '')
+                    .map(p => formatFilePath(p));
+
+                if (srcdir == '.' || srcdir == '') {
+                    // root entry: list the project dir itself.
+                    // entries filtered out by the root 'excluding' list are dropped:
+                    // they are either re-added by their own source entries below,
+                    // or not sources at all. keeping them here would require keeping
+                    // their exclude paths, and eide's prefix-matching excludes would
+                    // also kill any source entry re-added inside them.
+                    const rootExcludes = excludes.map(p => resolveExcludePath('.', p));
+                    const srcs = cprojectDir.GetList(SRC_FILE_FILTER, [/^[^\.].+/]);
+                    srcs.forEach(src => {
+                        if (rootExcludes.some(x => isCoveredBy(src.name, x))) return;
+                        if (src.IsFile()) {
+                            rootVirtualSrcsOfTarget.push(src.name);
+                        } else {
+                            rootSrcDirsOfTarget.push(src.name);
+                        }
+                    });
+                } else {
+                    rootSrcDirsOfTarget.push(srcdir);
                 }
 
-                (<string>e.$['excluding'] || '')
-                    .split('|').filter(s => s.trim() != '')
-                    .forEach(p => {
-                        tInfo.excList.push(formatFilePath(p));
-                    });
+                sourceEntries.push({ srcdir: srcdir == '' ? '.' : srcdir, excludes });
             });
+
+            root_virtualsrcs.push(...rootVirtualSrcsOfTarget);
+            root_srcdirs.push(...rootSrcDirsOfTarget);
+
+            // CDT: source entries form a union; each entry's 'excluding' filters
+            // only that entry's own contribution (paths are relative to the
+            // entry's path, verified against CDT-generated makefiles).
+            // Mapping to eide's flat prefix-matching excludeList:
+            //  - if another (non-root) entry covers an exclude path, that entry
+            //    re-includes the whole subtree and its own 'excluding' governs
+            //    it -> drop the exclude.
+            //  - if entries exist strictly inside an exclude path, keeping it
+            //    would also kill those re-added entries -> narrow it down to
+            //    the direct children on disk (recursively).
+            const entryPaths = sourceEntries.map(s => s.srcdir).filter(p => p != '.');
+            const excList: string[] = [];
+
+            const addExclude = (excPath: string, ownerPath: string): void => {
+                const covered = entryPaths.some(p => p != ownerPath && isCoveredBy(excPath, p));
+                if (covered) return;
+
+                const entryInside = entryPaths.some(p => p != excPath && isCoveredBy(p, excPath));
+                if (!entryInside) {
+                    excList.push(excPath);
+                    return;
+                }
+
+                const excDir = new File(NodePath.join(cprojectDir.path, excPath));
+                if (!excDir.IsDir()) {
+                    // entries cannot be inside a file; keep as is
+                    excList.push(excPath);
+                    return;
+                }
+                for (const child of excDir.GetList()) {
+                    addExclude(`${excPath}/${child.name}`, ownerPath);
+                }
+            };
+
+            for (const { srcdir, excludes } of sourceEntries) {
+                for (const exclude of excludes) {
+                    addExclude(resolveExcludePath(srcdir, exclude), srcdir);
+                }
+            }
+            tInfo.excList.push(...excList);
         }
     }
 
@@ -595,6 +696,39 @@ function parseToolOption(optionObj: any, prjtype: EclipseProjectType): { type: s
     // ilg.gnuarmeclipse.managedbuild.cross.option.c.linker.scriptfile
     if (VALUE_ID.includes('linker.script')) {
         return makeResult(VALUE_VALS, 'linkerScriptPath');
+    }
+    // riscv isa/abi:
+    //   option.target.isa.base = ilg.gnumcueclipse.managedbuild.cross.riscv.option.target.arch.rv32i
+    //   option.target.isa.multiply = true  (M)
+    //   option.target.isa.atomic = false   (A)
+    //   option.target.isa.fp.single = true (F)
+    //   option.target.isa.fp.double = true (D)
+    //   option.target.isa.compressed = true (C)
+    // the base/multiply/... options arrive separately, so collect them per
+    // toolchain into one 'riscvIsa' result; the caller merges them into an arch string
+    if (/\.riscv\.option\.target\.isa\.base/.test(VALUE_ID)) {
+        const m = /\.(rv\d+\w+)$/.exec(VALUE_VALS[0]);
+        if (m && m.length > 1)
+            return makeResult(m[1], 'riscvArchBase');
+        return IGNORED_VAL;
+    }
+    const isaExtRes = /\.riscv\.option\.target\.isa\.(multiply|atomic|fp\.single|fp\.double|fp\.quad|compressed|b\.pmp|b\.security)(?:\.\d+)?$/.exec(VALUE_ID);
+    if (isaExtRes) {
+        if (VALUE_VALS[0] !== 'true') return IGNORED_VAL;
+        const extMap: { [id: string]: string } = {
+            'multiply': 'm', 'atomic': 'a', 'fp.single': 'f', 'fp.double': 'd',
+            'fp.quad': 'q', 'compressed': 'c', 'b.pmp': 'zicsr', 'b.security': 'zifencei'
+        };
+        if (extMap[isaExtRes[1]])
+            return makeResult(extMap[isaExtRes[1]], 'riscvArchExt');
+        return IGNORED_VAL;
+    }
+    // riscv abi: option.target.abi.integer = ilg.gnumcueclipse.managedbuild.cross.riscv.option.abi.integer.ilp32
+    if (/\.riscv\.option\.target\.abi\.integer/.test(VALUE_ID)) {
+        const m = /\.(ilp32\w*|lp64\w*)$/.exec(VALUE_VALS[0]);
+        if (m && m.length > 1)
+            return makeResult(m[1], 'riscvAbi');
+        return IGNORED_VAL;
     }
     // ilg.gnuarmeclipse.managedbuild.cross.option.optimization.level = optimization.level.debug
     if (VALUE_ID.includes('optimization.level')) {

@@ -3895,7 +3895,10 @@ class RISCV_GCC implements IToolchian {
                 "misc-control": "--specs=nosys.specs --specs=nano.specs"
             },
             'c/cpp-compiler': {
-                "language-c": "c11",
+                // gcc's own default for C is gnu11 (gcc >= 5); keep it so newlib
+                // gnu extensions (e.g. TIMEVAL_TO_TIMESPEC in sys/time.h) stay
+                // visible unless a project explicitly picks a strict standard
+                "language-c": "gnu11",
                 "language-cpp": "c++11",
                 "optimization": 'level-debug',
                 "warnings": "all-warnings",
